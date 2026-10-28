@@ -1,0 +1,76 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>録音ツール</title><link rel="manifest" href="manifest.json"><meta name="theme-color" content="#1a73e8">
+<style>body{font:16px system-ui;margin:0;padding:16px;max-width:520px}select,input,button{font:inherit;width:100%;padding:12px;margin:6px 0;box-sizing:border-box}
+button{background:#1a73e8;color:#fff;border:0;border-radius:8px}button:disabled{background:#999}#up{background:#188038}#msg{min-height:3em;font-weight:bold}
+table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #ddd;padding:6px 4px}td+td{text-align:right}#st{color:#555;font-size:14px}</style></head><body>
+<h1 style="font-size:20px">録音ツール</h1><div id="st"></div>
+<select id="label"></select>
+<select id="dur"><option value="3">3秒（1本）</option><option value="15">15秒（5本に分割）</option><option value="30">30秒（10本に分割）</option><option value="60">60秒（20本に分割）</option></select>
+<div style="display:flex;gap:8px"><input id="custom" placeholder="対象外の音の名前を追加（例: 掃除機）"><button id="add" style="width:80px">追加</button></div>
+<input id="note" placeholder="メモ（例: 再生音 / 屋外 / 距離1m）">
+<button id="rec">録音</button><div id="msg"></div>
+<button id="up">書き出す</button><button id="clear" style="background:#c5221f">端末の録音をすべて削除</button>
+<table id="cnt"></table>
+<script>
+const $=id=>document.getElementById(id),LABELS={"train": "電車", "chime": "チャイム", "bicycle_bell": "自転車のベル", "siren": "サイレン", "door": "ドア", "tap_water": "水道の水", "waves": "波", "rain": "雨", "bird": "鳥の声", "dog_cat": "犬・猫", "guitar": "ギター", "drums": "ドラム", "clapping": "拍手", "speech": "話し声(負例)", "street": "街の雑音(負例)", "silence": "無音(負例)", "other": "その他の音(負例)"};
+// 対象外の音: 自由な名前で追加できる（端末に覚えておく）
+let EXTRA=[];try{EXTRA=JSON.parse(localStorage.extra||'[]')}catch(e){}
+const nameOf=k=>LABELS[k]||k+'（対象外）';
+$('add').onclick=()=>{const v=$('custom').value.trim();if(!/^[0-9A-Za-z_\-\u3040-\u30ff\u4e00-\u9fff]{1,30}$/.test(v)){$('msg').textContent='名前は30文字まで。記号とスペースは使えません';return}
+ if(!LABELS[v]&&!EXTRA.includes(v)){EXTRA.push(v);try{localStorage.extra=JSON.stringify(EXTRA)}catch(e){}}$('custom').value='';render().then(()=>$('label').value=v)};
+// ---- 端末内の保存（IndexedDB）: オフラインでも録音を失わない ----
+const db=new Promise((ok,ng)=>{const r=indexedDB.open('clips',1);r.onupgradeneeded=()=>r.result.createObjectStore('c',{keyPath:'id'});r.onsuccess=()=>ok(r.result);r.onerror=()=>ng(r.error)});
+const tx=async(m,f)=>{const d=await db;return new Promise((ok,ng)=>{const t=d.transaction('c',m),q=f(t.objectStore('c'));t.oncomplete=()=>ok(q&&q.result);t.onerror=()=>ng(t.error)})};
+const all=()=>tx('readonly',s=>s.getAll()),put=v=>tx('readwrite',s=>s.put(v)),del=id=>tx('readwrite',s=>s.delete(id));
+async function render(){const items=await all(),n={};items.forEach(i=>{n[i.label]=(n[i.label]||0)+1;if(!LABELS[i.label]&&!EXTRA.includes(i.label))EXTRA.push(i.label)});const names=[...Object.keys(LABELS),...EXTRA];
+ const sel=$('label'),cur=sel.value;sel.innerHTML=names.map(k=>`<option value="${k}">${nameOf(k)}（未書き出し ${n[k]||0}）</option>`).join('');if(cur)sel.value=cur;
+ $('cnt').innerHTML=names.map(k=>`<tr><td>${nameOf(k)}</td><td>未書き出し ${n[k]||0}</td></tr>`).join('');
+ $('up').disabled=!items.length;$('clear').disabled=!items.length;$('up').textContent=items.length?`書き出す（${items.length}件）`:'書き出すデータはありません'}
+let sw='';const net=()=>$('st').textContent=(navigator.onLine?'ネットワーク: つながっています':'ネットワーク: オフライン（録音は端末に保存されます）')+sw;
+addEventListener('online',net);addEventListener('offline',net);net();
+// ---- 録音 ----
+const WORKLET=`class R extends AudioWorkletProcessor{process(i){if(i[0]&&i[0][0])this.port.postMessage(i[0][0].slice());return true}}registerProcessor('rec',R)`;
+function wav(s,sr){const b=new ArrayBuffer(44+s.length*2),d=new DataView(b),w=(o,t)=>[...t].forEach((c,i)=>d.setUint8(o+i,c.charCodeAt(0)));
+ w(0,'RIFF');d.setUint32(4,36+s.length*2,true);w(8,'WAVEfmt ');d.setUint32(16,16,true);d.setUint16(20,1,true);d.setUint16(22,1,true);d.setUint32(24,sr,true);d.setUint32(28,sr*2,true);d.setUint16(32,2,true);d.setUint16(34,16,true);w(36,'data');d.setUint32(40,s.length*2,true);
+ s.forEach((v,i)=>d.setInt16(44+i*2,Math.max(-1,Math.min(1,v))*32767,true));return new Blob([b],{type:'audio/wav'})}
+async function record(sec,tick){
+ const st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+ const ctx=new AudioContext();await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET],{type:'application/javascript'})));
+ const src=ctx.createMediaStreamSource(st),node=new AudioWorkletNode(ctx,'rec'),need=sec*ctx.sampleRate,buf=[];let n=0;
+ await new Promise(done=>{node.port.onmessage=e=>{buf.push(e.data);n+=e.data.length;tick(n/ctx.sampleRate);if(n>=need)done()};src.connect(node);node.connect(ctx.destination)});
+ src.disconnect();node.disconnect();st.getTracks().forEach(t=>t.stop());
+ const a=new Float32Array(n);let o=0;buf.forEach(b=>{a.set(b,o);o+=b.length});const sr=ctx.sampleRate;ctx.close();return wav(a.subarray(0,need),sr)}
+$('rec').onclick=async()=>{const sec=+$('dur').value,lab=$('label').value;$('rec').disabled=true;
+ try{const a=await record(sec,t=>$('msg').textContent=`録音中… ${Math.min(sec,Math.floor(t))} / ${sec}秒`);
+  await put({id:crypto.randomUUID(),label:lab,note:$('note').value,blob:a,ts:Date.now()});
+  $('msg').textContent=`${nameOf(lab)}を端末に保存しました（${sec/3}本分）`;render()}
+ catch(e){$('msg').textContent='失敗: '+e.message}finally{$('rec').disabled=false}};
+// ---- 書き出し: 全録音を1つの ZIP にして、共有シート（AirDrop・ドライブ等）か保存で渡す。端末のデータは消さない ----
+const CRC=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+const crc32=u=>{let c=0xFFFFFFFF;for(let i=0;i<u.length;i++)c=CRC[(c^u[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0};
+function zip(files){const enc=new TextEncoder(),parts=[],cen=[];let off=0,cs=0;
+ for(const f of files){const nm=enc.encode(f.name),crc=crc32(f.data),h=new DataView(new ArrayBuffer(30));
+  h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x0800,true);h.setUint32(14,crc,true);h.setUint32(18,f.data.length,true);h.setUint32(22,f.data.length,true);h.setUint16(26,nm.length,true);
+  parts.push(h.buffer,nm,f.data);
+  const c=new DataView(new ArrayBuffer(46));c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(8,0x0800,true);c.setUint32(16,crc,true);c.setUint32(20,f.data.length,true);c.setUint32(24,f.data.length,true);c.setUint16(28,nm.length,true);c.setUint32(42,off,true);
+  cen.push(c.buffer,nm);cs+=46+nm.length;off+=30+nm.length+f.data.length}
+ const e=new DataView(new ArrayBuffer(22));
+ e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
+ return new Blob([...parts,...cen,e.buffer],{type:'application/zip'})}
+const stamp=t=>new Date(t).toISOString().replace(/[-:]/g,'').slice(0,15);
+$('up').onclick=async()=>{$('up').disabled=true;
+ try{const items=(await all()).sort((a,b)=>a.ts-b.ts),files=[],memo=['file,label,note'],cnt={};
+  for(const i of items){cnt[i.label]=(cnt[i.label]||0)+1;const name=`${i.label}_${stamp(i.ts)}_${String(cnt[i.label]).padStart(2,'0')}.wav`;
+   files.push({name,data:new Uint8Array(await i.blob.arrayBuffer())});memo.push(`${name},${i.label},"${(i.note||'').replace(/"/g,'""')}"`)}
+  files.push({name:'memo.csv',data:new TextEncoder().encode(memo.join('\n'))});
+  const z=zip(files),name=`clips_${stamp(Date.now())}.zip`,file=new File([z],name,{type:'application/zip'});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});$('msg').textContent=`${items.length}件を書き出しました。Mac に届いたことを確認してから、端末の録音を削除してください`}
+  else{const a=document.createElement('a');a.href=URL.createObjectURL(z);a.download=name;document.body.appendChild(a);a.click();a.remove();$('msg').textContent=`${items.length}件を ${name} として保存しました。Mac に届いたことを確認してから、端末の録音を削除してください`}}
+ catch(e){$('msg').textContent=e.name==='AbortError'?'書き出しを取りやめました（録音は端末に残っています）':'書き出せませんでした: '+e.message}
+ render()};
+$('clear').onclick=async()=>{const items=await all();if(!items.length||!confirm(`端末の録音 ${items.length} 件をすべて削除します。Mac に届いたことを確認しましたか？`))return;
+ for(const i of items)await del(i.id);$('msg').textContent='削除しました';render()};
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').then(()=>{sw=' ／ オフライン起動: 準備OK';net()}).catch(e=>{sw=' ／ オフライン起動: 使えません（'+e.message+'）';net()});
+else{sw=' ／ オフライン起動: 使えません';net()}
+render();
+</script></body></html>
