@@ -1,4 +1,4 @@
-const K='clip-rec-v1';
+const K='clip-rec-v2';
 addEventListener('install',e=>{e.waitUntil(caches.open(K).then(c=>c.addAll(['./','./manifest.json'])).then(()=>skipWaiting()))});
 addEventListener('activate',e=>e.waitUntil(clients.claim()));
 addEventListener('fetch',e=>{if(e.request.method!=='GET')return;

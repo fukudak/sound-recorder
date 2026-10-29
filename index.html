@@ -9,6 +9,7 @@ table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #ddd;paddin
 <input id="note" placeholder="メモ（例: 再生音 / 屋外 / 距離1m）">
 <button id="rec">録音</button><div id="msg"></div>
 <button id="up">書き出す</button><button id="clear" style="background:#c5221f">端末の録音をすべて削除</button>
+<hr><div>書き出した ZIP を取り込む</div><input id="zipf" type="file" accept=".zip,application/zip"><button id="zipup">ZIP を送信</button>
 <table id="cnt"></table>
 <script>
 const $=id=>document.getElementById(id),LABELS={"train": "電車", "chime": "チャイム", "bicycle_bell": "自転車のベル", "siren": "サイレン", "door": "ドア", "tap_water": "水道の水", "waves": "波", "rain": "雨", "bird": "鳥の声", "dog_cat": "犬・猫", "guitar": "ギター", "drums": "ドラム", "clapping": "拍手", "speech": "話し声(負例)", "street": "街の雑音(負例)", "silence": "無音(負例)", "other": "その他の音(負例)"};
@@ -63,8 +64,10 @@ $('up').onclick=async()=>{$('up').disabled=true;
    files.push({name,data:new Uint8Array(await i.blob.arrayBuffer())});memo.push(`${name},${i.label},"${(i.note||'').replace(/"/g,'""')}"`)}
   files.push({name:'memo.csv',data:new TextEncoder().encode(memo.join('\n'))});
   const z=zip(files),name=`clips_${stamp(Date.now())}.zip`,file=new File([z],name,{type:'application/zip'});
-  if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});$('msg').textContent=`${items.length}件を書き出しました。Mac に届いたことを確認してから、端末の録音を削除してください`}
-  else{const a=document.createElement('a');a.href=URL.createObjectURL(z);a.download=name;document.body.appendChild(a);a.click();a.remove();$('msg').textContent=`${items.length}件を ${name} として保存しました。Mac に届いたことを確認してから、端末の録音を削除してください`}}
+  const url=URL.createObjectURL(z),tip=`${items.length}件の ZIP ができました。Mac に届いたことを確認してから、端末の録音を削除してください`;
+  $('msg').innerHTML=`${tip}<br><a id="dl" href="${url}" download="${name}" style="display:block;margin:8px 0;padding:12px;background:#188038;color:#fff;border-radius:8px;text-align:center;text-decoration:none">ZIP を保存する</a><button id="sh">共有する（AirDrop・ドライブなど）</button>`;
+  $('sh').onclick=async()=>{try{await navigator.share({files:[file],title:name})}catch(e){if(e.name!=='AbortError')$('msg').textContent='共有できませんでした（「ZIP を保存する」を使ってください）: '+e.message}};
+  if(!(navigator.canShare&&navigator.canShare({files:[file]})))$('sh').style.display='none'}
  catch(e){$('msg').textContent=e.name==='AbortError'?'書き出しを取りやめました（録音は端末に残っています）':'書き出せませんでした: '+e.message}
  render()};
 $('clear').onclick=async()=>{const items=await all();if(!items.length||!confirm(`端末の録音 ${items.length} 件をすべて削除します。Mac に届いたことを確認しましたか？`))return;
